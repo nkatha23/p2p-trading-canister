@@ -1,11 +1,13 @@
 {
     "compilerOptions": {
-        "allowSyntheticDefaultImports": true,
-        "strictPropertyInitialization": false,
-        "strict": true,
         "target": "ES2020",
+        "lib": ["ES2020", "DOM"],
+        "module": "ES2020",
         "moduleResolution": "node",
-        "allowJs": true,
-        "outDir": "HACK_BECAUSE_OF_ALLOW_JS"
+        "strict": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "outDir": "dist",
+        "types": []
     }
 }

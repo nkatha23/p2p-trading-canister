@@ -1,210 +1,138 @@
 import { v4 as uuidv4 } from "uuid";
 import { StableBTreeMap } from "azle";
-import { CanisterMethodInfo } from "azle";
+import express from "express";
 
-// Types for Producers, Consumers, and Transactions
-type Producer = {
-  Some: any;
+// Define data structures
+class Producer {
   id: string;
   name: string;
-  energyCapacity: bigint; // In kWh
-  pricePerKWh: bigint; // Price per kWh (in smallest unit, e.g., cents)
-  availableEnergy: bigint; // Energy left to sell (in kWh)
-};
+  energyCapacity: number;
+  pricePerKWh: number;
+  availableEnergy: number;
 
-type Consumer = {
-  id: string;
-  name: string;
-  energyNeed: bigint; // Amount of energy needed (in kWh)
-  budget: bigint; // Budget available for purchase (in smallest unit)
-};
-
-type EnergyTransaction = {
-  producerId: string;
-  consumerId: string;
-  energyAmount: bigint; // Amount of energy transacted (in kWh)
-  totalPrice: bigint; // Total price for the transaction (in smallest unit)
-};
-
-// Stable storage for Producers, Consumers, and Transactions
-const producers = StableBTreeMap<string, Producer>(0); // For storing Producers
-const consumers = StableBTreeMap<string, Consumer>(1); // For storing Consumers
-const transactions = StableBTreeMap<string, EnergyTransaction>(2); // For storing Transactions
-
-// Helper function to get the current date in milliseconds
-function getCurrentDate(): Date {
-  const timestamp = new Number(Date.now());
-  return new Date(timestamp.valueOf());
+  constructor(name: string, energyCapacity: number, pricePerKWh: number) {
+    this.id = uuidv4();
+    this.name = name;
+    this.energyCapacity = energyCapacity;
+    this.pricePerKWh = pricePerKWh;
+    this.availableEnergy = energyCapacity;
+  }
 }
 
-// P2P Energy Trading Canister Actor
-export const p2pEnergyTrading = {  // Add a new producer
-  addProducer: async (name: string, energyCapacity: bigint, pricePerKWh: bigint): Promise<string> => {
-    const id = uuidv4(); // Generate unique ID for the producer
-    const newProducer: Producer = {
-      Some: null,
-      id,
-      name,
-      energyCapacity,
-      pricePerKWh,
-      availableEnergy: energyCapacity,
-    };
-    producers.insert(id, newProducer);
-    return `Producer ${name} added successfully with ${energyCapacity} kWh capacity.`;
-  },  // Add a new consumer
-  addConsumer: async (name: string, energyNeed: bigint, budget: bigint): Promise<string> => {
-    const id = uuidv4(); // Generate unique ID for the consumer
-    const newConsumer: Consumer = {
-      id,
-      name,
-      energyNeed,
-      budget,
-    };
-    consumers.insert(id, newConsumer);
-    return `Consumer ${name} added successfully with a need for ${energyNeed} kWh and budget ${budget}.`;
-  },
-  // Get all producers
-  getAllProducers: async (): Promise<Producer[]> => {
-    return producers.values();
-  },
+class Consumer {
+  id: string;
+  name: string;
+  energyNeed: number;
+  budget: number;
 
-  // Get all consumers
-  getAllConsumers: async (): Promise<Consumer[]> => {
-    return consumers.values();
-  },
+  constructor(name: string, energyNeed: number, budget: number) {
+    this.id = uuidv4();
+    this.name = name;
+    this.energyNeed = energyNeed;
+    this.budget = budget;
+  }
+}
 
-  // Match a consumer with a producer based on their energy need and budget
-  matchProducerConsumer: async (consumerId: string): Promise<string> => {
-    const consumerOpt = consumers.get(consumerId);
-    if (!consumerOpt) {
-      return `Consumer with ID ${consumerId} not found.`;
-    }
+class EnergyTransaction {
+  transactionId: string;
+  producerId: string;
+  consumerId: string;
+  energyAmount: number;
+  totalPrice: number;
+  // timestamp: Date;
 
-    const consumer = consumerOpt.Some;
-    if (!consumer) {
-      return `Consumer with ID ${consumerId} not found.`;
-    }
+  constructor(producerId: string, consumerId: string, energyAmount: number, totalPrice: number) {
+    this.transactionId = uuidv4();
+    this.producerId = producerId;
+    this.consumerId = consumerId;
+    this.energyAmount = energyAmount;
+    this.totalPrice = totalPrice;
+    // this.timestamp = getCurrentDate();
+  }
+}
 
-    // Find a matching producer for the consumer
-    let matchedProducer: Producer | null = null;
-    for (const producerOpt of producers.values()) {
-      const producer = producerOpt.Some;
-      if (producer && producer.availableEnergy >= consumer.energyNeed &&
-        producer.pricePerKWh <= consumer.budget / consumer.energyNeed
-      ) {
-        matchedProducer = producer;
-        break;
-      }
-    }
+// ✅ Fixed StableBTreeMap instantiation (used as a function, not a class)
+const producersStorage = StableBTreeMap<string, Producer>(0);
+const consumersStorage = StableBTreeMap<string, Consumer>(1);
+const transactionsStorage = StableBTreeMap<string, EnergyTransaction>(2);
 
-    if (!matchedProducer) {
-      return `No suitable producer found for consumer ${consumerId}.`;
-    }
+const app = express();
+app.use(express.json());
 
-    return `Found a match with producer ${matchedProducer.name} at ${matchedProducer.pricePerKWh} per kWh.`;
-  },
-
-  // Execute a transaction between a producer and a consumer
-  executeTransaction: async (consumerId: string, producerId: string): Promise<string> => {
-    const consumerOpt = consumers.get(consumerId);
-    const producerOpt = producers.get(producerId);
-
-    if (!consumerOpt) {
-      return `Consumer with ID ${consumerId} not found.`;
-    }
-
-    if (!producerOpt) {
-      return `Producer with ID ${producerId} not found.`;
-    }
-
-    const consumer = consumerOpt.Some;
-    const producer = producerOpt.Some;
-
-    if (!consumer || !producer) {
-      return `Consumer or Producer not found.`;
-    }
-
-    // Check if the consumer can afford the energy and the producer has enough capacity
-    if (consumer.energyNeed > producer.availableEnergy) {
-      return `Producer doesn't have enough available energy.`;
-    }
-    if (consumer.budget < consumer.energyNeed * producer.pricePerKWh) {
-      return `Consumer doesn't have enough budget.`;
-    }
-
-    // Calculate the total price for the energy
-    const totalPrice = consumer.energyNeed * producer.pricePerKWh;
-
-    // Create the energy transaction record
-    const transaction: EnergyTransaction = {
-      producerId,
-      consumerId,
-      energyAmount: consumer.energyNeed,
-      totalPrice,
-    };
-
-    // Store the transaction
-    transactions.insert(`${consumerId}-${producerId}`, transaction);
-
-    // Update the producer's available energy and the consumer's budget
-    producer.availableEnergy -= consumer.energyNeed;
-    consumer.budget -= totalPrice;
-    consumers.insert(consumerId, consumer);
-    producers.insert(producerId, producer);
-
-    // Return a success message
-    return `Transaction successful: ${consumer.name} bought ${consumer.energyNeed} kWh from ${producer.name} for ${totalPrice}.`;
-
-  },  
-    // Update producer details (e.g., energy capacity or price)
-updateProducer: async (producerId: string, energyCapacity?: bigint, pricePerKWh?: bigint): Promise<string> => {
-    const producerOpt = producers.get(producerId);
-
-    if ("None" in producerOpt) {
-      return `Producer with ID ${producerId} not found.`;
-    }
-
-    const producer = producerOpt.Some;
-
-    // Update the producer's details
-    if (energyCapacity !== undefined) producer.energyCapacity = energyCapacity;
-    if (pricePerKWh !== undefined) producer.pricePerKWh = pricePerKWh;
-
-    // Save the updated producer
-    producers.insert(producerId, producer);
-    return `Producer ${producerId} updated successfully.`;
-},// Update consumer details (e.g., energy need or budget)
-updateConsumer: async (consumerId: string, energyNeed?: bigint, budget?: bigint): Promise<string> => {
-  // Retrieve the consumer from the storage
-  const consumerOpt = consumers.get(consumerId); // TypeScript will infer this as `Consumer | undefined`
-
-  // Check if the consumer exists
-  if ("None" in consumerOpt) {
-    return `Consumer with ID ${consumerId} not found.`;
+// CRUD for Producers
+app.post("/producers", (req, res) => {
+  const { name, energyCapacity, pricePerKWh } = req.body;
+  if (!name || energyCapacity === undefined || pricePerKWh === undefined) {
+    return res.status(400).send("Missing required producer fields");
   }
 
-  const consumer = consumerOpt.Some; // Get the consumer
+  const producer = new Producer(name, energyCapacity, pricePerKWh);
+  producersStorage.insert(producer.id, producer);
+  res.json(producer);
+});
 
-  // Update the consumer's details if necessary
-  if (energyNeed !== undefined) consumer.energyNeed = energyNeed;
-  if (budget !== undefined) consumer.budget = budget;
+app.get("/producers", (req, res) => {
+  res.json(producersStorage.values());
+});
 
-  // Save the updated consumer back into the storage
-  consumers.insert(consumerId, consumer);
-  return `Consumer ${consumerId} updated successfully.`;
-},
-// Delete a consumer
-deleteConsumer: async (consumerId: string): Promise<string> => {
-  // Retrieve the consumer from the storage
-  const consumerOpt = consumers.get(consumerId); // TypeScript will infer this as `Consumer | undefined`
-
-  // Check if the consumer exists
-  if ("None" in consumerOpt) {
-    return `Consumer with ID ${consumerId} not found.`;
+// CRUD for Consumers
+app.post("/consumers", (req, res) => {
+  const { name, energyNeed, budget } = req.body;
+  if (!name || energyNeed === undefined || budget === undefined) {
+    return res.status(400).send("Missing required consumer fields");
   }
 
-  // Remove the consumer from the storage
-  consumers.remove(consumerId);
-  return `Consumer ${consumerId} deleted successfully.`;
-},}
+  const consumer = new Consumer(name, energyNeed, budget);
+  consumersStorage.insert(consumer.id, consumer);
+  res.json(consumer);
+});
 
+app.get("/consumers", (req, res) => {
+  res.json(consumersStorage.values());
+});
+
+// Energy trading
+app.post("/trade", (req, res) => {
+  const { consumerId, producerId, energyAmount } = req.body;
+  if (!consumerId || !producerId || energyAmount === undefined) {
+    return res.status(400).send("Missing required trade fields");
+  }
+
+  const consumer = consumersStorage.get(consumerId);
+  const producer = producersStorage.get(producerId);
+
+  if (!consumer || !producer) {
+    return res.status(404).send("Consumer or Producer not found");
+  }
+
+  // const totalPrice = energyAmount * producer.pricePerKWh;
+  // if (producer.availableEnergy < energyAmount || consumer.budget < totalPrice) {
+  //   return res.status(400).send("Insufficient energy or budget");
+  // }
+
+//   // Update records
+//   producer.availableEnergy -= energyAmount;
+//   consumer.budget -= totalPrice;
+//   producersStorage.insert(producer.id, producer);
+//   consumersStorage.insert(consumer.id, consumer);
+
+//   const transaction = new EnergyTransaction(producer.id, consumer.id, energyAmount, totalPrice);
+//   transactionsStorage.insert(transaction.transactionId, transaction);
+
+//   res.json(transaction);
+// });
+
+app.get("/transactions", (req, res) => {
+  res.json(transactionsStorage.values());
+});
+
+// Start the server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
+
+// Utility function to get the current date
+function getCurrentDate(): Date {
+  return new Date();
+  }})
